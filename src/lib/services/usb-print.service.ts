@@ -150,9 +150,11 @@ export class UsbPrintService {
 
     this.device = printer;
 
-    // Always close first to clear any stale state from previous sessions
+    // Always reset to a clean state first
     if (this.device.opened) {
       try { await this.device.close(); } catch { /* ignore */ }
+      // Give the OS time to release the device
+      await this.delay(200);
     }
 
     await this.device.open();
@@ -167,17 +169,33 @@ export class UsbPrintService {
       throw new Error('No printer interface/endpoint found on this USB device.');
     }
 
-    try {
-      await this.device.claimInterface(this.printerInterface);
-    } catch {
-      // Interface may be held from a previous session. Close and reopen.
-      await this.device.close();
-      await this.device.open();
-      if (this.device.configuration === null) {
-        await this.device.selectConfiguration(1);
+    // Try to claim, with up to 2 retries
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await this.device.claimInterface(this.printerInterface);
+        return; // Success
+      } catch {
+        if (attempt < 2) {
+          // Release, close, wait, reopen
+          try { await this.device.releaseInterface(this.printerInterface); } catch { /* ignore */ }
+          try { await this.device.close(); } catch { /* ignore */ }
+          await this.delay(300 * (attempt + 1));
+          await this.device.open();
+          if (this.device.configuration === null) {
+            await this.device.selectConfiguration(1);
+          }
+        } else {
+          throw new Error(
+            'Unable to claim USB interface. Close other tabs/apps using the printer and retry.'
+          );
+        }
       }
-      await this.device.claimInterface(this.printerInterface);
     }
+  }
+
+  /** Wait for a given number of milliseconds. */
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /** Checks if a USBDevice is a printer (class 7 at device or interface level). */

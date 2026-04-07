@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.1 (2026-04-07)
+
+### Bug Fixes
+
+- **USB**: fix `claimInterface` failing when device was held by a previous browser session
+- **USB**: retry up to 3 times with increasing delays to let the OS release the interface
+- **USB**: properly `releaseInterface` before closing the device
+- **Bluetooth**: silent reconnect via `getDevices()` (Chrome 92+) after browser restart
+- **Window**: fix `window.print()` being called twice (double print dialog)
+- **Auto-detect**: never opens a picker — only uses already-authorized devices
+- **Fallback**: no more surprise `window.print()` when USB/Bluetooth is configured
+
 ## 1.0.0 (2026-04-07)
 
 ### Features
