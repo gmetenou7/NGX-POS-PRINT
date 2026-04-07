@@ -5,7 +5,7 @@ Thank you for your interest in contributing!
 ## Getting Started
 
 ```bash
-git clone https://github.com/nicosmusic-cloud/ngx-pos-print.git
+git clone https://github.com/gmetenou7/NGX-POS-PRINT.git
 cd ngx-pos-print
 npm install
 npm run build

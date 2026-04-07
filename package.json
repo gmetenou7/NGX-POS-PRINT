@@ -6,7 +6,7 @@
   "author": "Gildas",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nicosmusic-cloud/ngx-pos-print"
+    "url": "https://github.com/gmetenou7/NGX-POS-PRINT"
   },
   "scripts": {
     "build": "ng-packagr -p ng-package.json",
