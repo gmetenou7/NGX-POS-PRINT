@@ -1,0 +1,9 @@
+src/
+node_modules/
+out-tsc/
+.angular/
+tsconfig*.json
+ng-package.json
+.gitignore
+.npmignore
+*.tgz
