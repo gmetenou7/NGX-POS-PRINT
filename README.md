@@ -386,6 +386,23 @@ this.posPrint.registerDriver(new CapacitorBluetoothAdapter());
 
 ---
 
+## Windows setup (for USB)
+
+On Windows, the default `usbprint.sys` driver blocks WebUSB access. You need to replace it with the **WinUSB** driver.
+
+**Use the companion installer:** [POS Printer Driver Installer for Windows](https://github.com/gmetenou7/POS-PRINTER-DRIVER-FOR-NGX-POS-PRINT-IN-WINDOWS)
+
+```
+1. Download POS-Printer-Driver-Installer.exe
+2. Plug in your POS printer
+3. Run the installer and select your printer
+4. Done — WebUSB now works!
+```
+
+> This only needs to be done **once per printer**. The change survives reboots.
+
+---
+
 ## Linux setup (for USB)
 
 On Linux, Chrome needs permission to access USB devices. Run once:
@@ -407,7 +424,8 @@ echo "blacklist usblp" | sudo tee /etc/modprobe.d/no-usblp.conf
 
 Then unplug and replug the printer.
 
-> **Windows and macOS**: no extra setup needed.  
+> **Windows (USB)**: You **must** install the WinUSB driver first. See [POS Printer Driver Installer for Windows](https://github.com/gmetenou7/POS-PRINTER-DRIVER-FOR-NGX-POS-PRINT-IN-WINDOWS).  
+> **macOS**: no extra setup needed.  
 > **Android**: no extra setup needed.
 
 ---
@@ -484,6 +502,58 @@ A: No, this is an Angular library. For vanilla JS, look at `escpos` or `webusb-p
 
 **Q: What printers are supported?**  
 A: Any ESC/POS compatible thermal printer. This includes most POS printers: Epson TM series, Star TSP series, Bixolon, Rongta, Xprinter, etc.
+
+---
+
+## Ecosystem — do I need the driver installer?
+
+`ngx-pos-print` works on **all platforms** (Windows, macOS, Linux, Android). But on **Windows only**, USB printing requires an extra one-time step.
+
+### Why?
+
+Windows ships with a driver called `usbprint.sys` that takes **exclusive control** of USB printers. This blocks WebUSB from accessing the printer. The companion project replaces that driver with **WinUSB**, which allows the browser to communicate directly with the printer.
+
+### When do I need it?
+
+| Platform | USB | Bluetooth | Network | Browser |
+|----------|:---:|:---------:|:-------:|:-------:|
+| **Windows** | **Driver needed** | No setup | No setup | No setup |
+| **macOS** | No setup | No setup | No setup | No setup |
+| **Linux** | udev rules (see above) | No setup | No setup | No setup |
+| **Android** | No setup | No setup | No setup | No setup |
+
+> **Only Windows + USB** requires the driver installer. All other combinations work out of the box.
+
+### The two projects
+
+| Project | What it does | When you need it |
+|---------|-------------|-----------------|
+| **[ngx-pos-print](https://github.com/gmetenou7/NGX-POS-PRINT)** | Angular library that sends ESC/POS commands to thermal printers via USB, Bluetooth, Network, or browser print | **Always** — this is the library you install in your Angular app |
+| **[POS Printer Driver Installer](https://github.com/gmetenou7/POS-PRINTER-DRIVER-FOR-NGX-POS-PRINT-IN-WINDOWS)** | One-click installer that replaces the Windows USB driver with WinUSB | **Only on Windows**, and **only if you use USB printing** |
+
+```
+                        ┌─────────────────────────────────┐
+                        │        Your Angular App          │
+                        └──────────────┬──────────────────┘
+                                       │
+                                       ▼
+                        ┌─────────────────────────────────┐
+                        │         ngx-pos-print            │
+                        │  (npm install ngx-pos-print)     │
+                        └──┬──────┬──────────┬──────────┘
+                           │      │          │       │
+                         USB  Bluetooth  Network  Browser
+                           │      │          │       │
+                           ▼      ▼          ▼       ▼
+                       Printer  Printer   Printer  OS Dialog
+                           ▲
+                           │
+              ┌────────────┴─────────────┐
+              │  POS Printer Driver       │
+              │  Installer (Windows only) │
+              │  Run once per printer     │
+              └──────────────────────────┘
+```
 
 ---
 
