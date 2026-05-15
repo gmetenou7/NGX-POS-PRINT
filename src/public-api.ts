@@ -24,6 +24,7 @@ export { EscPosBuilder } from './lib/builders/escpos-builder';
 // Services
 export { PosPrintService } from './lib/services/pos-print.service';
 export { BluetoothPrintService } from './lib/services/bluetooth-print.service';
+export { BridgePrintService } from './lib/services/bridge-print.service';
 export { NetworkPrintService } from './lib/services/network-print.service';
 export { UsbPrintService } from './lib/services/usb-print.service';
 export { WindowPrintService } from './lib/services/window-print.service';

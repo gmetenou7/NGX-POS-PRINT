@@ -1,5 +1,5 @@
 /** Supported print drivers */
-export type PrintDriver = 'bluetooth' | 'network' | 'usb' | 'window' | 'custom';
+export type PrintDriver = 'bluetooth' | 'network' | 'usb' | 'window' | 'bridge' | 'custom';
 
 /** Text alignment for print lines */
 export type TextAlign = 'left' | 'center' | 'right';
@@ -25,6 +25,13 @@ export interface PosPrintConfig {
   encoding?: string;
   /** Enable debug logging to console */
   debug?: boolean;
+  /**
+   * Base URL of the Print Bridge agent (https://github.com/gmetenou7/POS-PRINTER-DRIVER-FOR-NGX-POS-PRINT-IN-WINDOWS).
+   * If unset, the bridge driver auto-discovers HTTPS:19101 first, then HTTP:19100.
+   */
+  bridgeBaseUrl?: string;
+  /** Pin the bridge driver to a specific printer ID returned by `/printers`. */
+  bridgePrinterId?: string;
 }
 
 /** A single line or command in a print job */

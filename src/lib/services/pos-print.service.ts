@@ -4,6 +4,7 @@ import type { DetectedPrinter, PosPrintConfig, PrintDriver, PrintDriverAdapter, 
 import { POS_PRINT_CONFIG, POS_PRINT_CUSTOM_DRIVERS } from '../providers/pos-print.providers';
 import { EscPosBuilder } from '../builders/escpos-builder';
 import { BluetoothPrintService } from './bluetooth-print.service';
+import { BridgePrintService } from './bridge-print.service';
 import { NetworkPrintService } from './network-print.service';
 import { UsbPrintService } from './usb-print.service';
 import { WindowPrintService } from './window-print.service';
@@ -25,6 +26,7 @@ const STORAGE_KEY = 'ngx-pos-print:driver';
 export class PosPrintService {
   private readonly config = inject(POS_PRINT_CONFIG, { optional: true }) ?? {};
   private readonly bluetooth = inject(BluetoothPrintService);
+  private readonly bridge = inject(BridgePrintService);
   private readonly network = inject(NetworkPrintService);
   private readonly usb = inject(UsbPrintService);
   private readonly windowPrint = inject(WindowPrintService);
@@ -118,15 +120,17 @@ export class PosPrintService {
       this.customDrivers.map((d) => d.detect().catch(() => [] as DetectedPrinter[]))
     );
 
-    const [usbPrinters, btPrinters, netPrinters] = await Promise.all([
+    const [usbPrinters, btPrinters, netPrinters, bridgePrinters] = await Promise.all([
       this.usb.detect(),
       this.bluetooth.detect(),
       this.network.detect(),
+      this.bridge.detect(),
     ]);
 
     const customPrinters = ([] as DetectedPrinter[]).concat(...customResults);
     const printers: DetectedPrinter[] = [
       ...customPrinters,
+      ...bridgePrinters,
       ...usbPrinters,
       ...btPrinters,
       ...netPrinters,
@@ -192,6 +196,7 @@ export class PosPrintService {
   getAvailableDrivers(): PrintDriver[] {
     const drivers: PrintDriver[] = [];
     if (this.customDrivers.length > 0) drivers.push('custom');
+    if (this.bridge.isAvailable()) drivers.push('bridge');
     if (this.usb.isAvailable()) drivers.push('usb');
     if (this.bluetooth.isAvailable()) drivers.push('bluetooth');
     if (this.network.isAvailable()) drivers.push('network');
@@ -201,7 +206,12 @@ export class PosPrintService {
 
   /**
    * Detects the best driver based on what's actually connected/authorized.
-   * Priority: Custom → USB → Bluetooth → Network → Window
+   * Priority: Custom → Bridge → USB → Bluetooth → Network → Window
+   *
+   * Bridge sits before USB on purpose: when the Print Bridge agent is
+   * installed it routes silently across every channel (winspool / libusb /
+   * network / serial), so it is the most reliable production choice on
+   * Windows installations.
    */
   private async detectBestDriver(config: PosPrintConfig): Promise<PrintDriver> {
     for (const adapter of this.customDrivers) {
@@ -210,6 +220,7 @@ export class PosPrintService {
       } catch { /* skip */ }
     }
 
+    if (this.bridge.isAvailable() && await this.bridge.isConnected()) return 'bridge';
     if (this.usb.isAvailable() && await this.usb.isConnected()) return 'usb';
     if (this.bluetooth.isAvailable() && await this.bluetooth.isConnected()) return 'bluetooth';
     if (config.networkIp && this.network.isAvailable() &&
@@ -238,6 +249,8 @@ export class PosPrintService {
         return this.bluetooth.print(data);
       case 'network':
         return this.network.print(data, config.networkIp, config.networkPort);
+      case 'bridge':
+        return this.bridge.print(data);
       case 'window':
         return { success: false, driver: 'window', error: 'Window driver does not support raw ESC/POS. Use printLines().', timestamp: Date.now() };
       default:
