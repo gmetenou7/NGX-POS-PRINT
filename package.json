@@ -1,6 +1,6 @@
 {
   "name": "ngx-pos-print",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Angular library for POS thermal printing — Bluetooth, Network, USB or browser fallback. No installation required. Supports NgModule and Standalone.",
   "license": "MIT",
   "author": "Gildas",
@@ -10,7 +10,8 @@
   },
   "scripts": {
     "build": "ng-packagr -p ng-package.json",
-    "pack": "npm run build && cd dist && npm pack"
+    "pack": "npm run build && cd dist && npm pack",
+    "release": "npm run build && cd dist && npm publish"
   },
   "keywords": [
     "angular",
