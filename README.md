@@ -28,17 +28,19 @@ Your Angular App  --->  ngx-pos-print  --->  Thermal Printer
 ```
                     print() called
                          |
-        +---------+------+------+---------+
-        |         |             |         |
-      USB    Bluetooth      Network    Browser
-    (WebUSB)  (Web BT)    (WebSocket)  (window.print)
-        |         |             |         |
-        v         v             v         v
-    Direct     Direct       Direct     OS Print
-    to device  to device    to device  Dialog
+        +-----+--------+--+--+----------+---------+
+        |     |        |     |          |         |
+     Bridge USB    Bluetooth Network Custom   Browser
+     (HTTP)(WebUSB) (Web BT) (WebSkt)         (window.print)
+        |     |        |     |          |         |
+        v     v        v     v          v         v
+     Local  Direct   Direct Direct   Capacitor  OS Print
+     agent  device   device device   plugin     Dialog
 ```
 
 **The library auto-detects your printer.** You pair it once in the settings, then every print is automatic — zero popups, zero dialogs.
+
+> **`bridge` driver (new in 1.1.1+)** — talks to a local [Print Bridge](https://github.com/gmetenou7/POS-PRINTER-DRIVER-FOR-NGX-POS-PRINT-IN-WINDOWS) agent installed on the user's machine. The agent handles all the platform-specific routing (USB driver, network, serial, Bluetooth) so the browser never sees a permission picker, a USB device dialog, or a Windows print dialog. Recommended on Windows.
 
 ---
 
@@ -46,11 +48,13 @@ Your Angular App  --->  ngx-pos-print  --->  Thermal Printer
 
 | Connection    | Chrome / Edge | Android Chrome | Android Capacitor | Firefox / Safari | iOS    |
 |---------------|:------------:|:--------------:|:-----------------:|:----------------:|:------:|
+| **Bridge**    | Yes (Windows) | —              | —                 | Yes (Windows)    | —      |
 | **USB**       | Yes          | Yes (OTG)      | Custom driver      | No               | No     |
 | **Bluetooth** | Yes          | Yes            | Custom driver      | No               | No     |
 | **Network**   | Yes          | Yes            | Yes                | Yes              | Yes    |
 | **Browser**   | Yes          | Yes            | Yes                | Yes              | Yes    |
 
+> **Bridge** works in **every browser on Windows** as long as the [Print Bridge agent](https://github.com/gmetenou7/POS-PRINTER-DRIVER-FOR-NGX-POS-PRINT-IN-WINDOWS) is installed — including Firefox and Safari/macWebkit. It's the recommended path for production Windows POS setups.  
 > **USB and Bluetooth** require a Chromium-based browser (Chrome, Edge, Opera, Brave).  
 > **Network and Browser** work on every browser.  
 > **Capacitor/Cordova apps**: use the custom driver adapter (see below).
@@ -262,7 +266,8 @@ const current = this.posPrint.preferredDriver; // 'usb' | 'bluetooth' | ... | nu
 ### 3. In the global config
 
 ```typescript
-providePosPrint({ driver: 'usb', paperSize: 80 })
+// Pick any one of: 'bridge' | 'usb' | 'bluetooth' | 'network' | 'window' | 'custom'
+providePosPrint({ driver: 'bridge', paperSize: 80 })
 ```
 
 ---
@@ -319,13 +324,14 @@ const data = new EscPosBuilder(80)   // 80mm or 58mm paper
 
 ```typescript
 providePosPrint({
-  driver: 'usb',           // Force a driver: 'usb' | 'bluetooth' | 'network' | 'window'
-                            // Default: auto-detect
-  paperSize: 80,            // Paper width: 80 (standard) or 58 (small)
-                            // Default: 80
+  driver: 'bridge',         // Force a driver: 'bridge' | 'usb' | 'bluetooth' | 'network' | 'window'
+                            // Default: auto-detect (Bridge wins when the agent is installed)
+  paperSize: 80,            // Paper width: 80 (standard) or 58 (small) — default 80
   networkIp: '192.168.1.50',// IP for network printing
   networkPort: 9100,        // Port for network printing (default: 9100)
   bluetoothServiceUUID: '...', // Override Bluetooth service UUID
+  bridgeBaseUrl: 'https://localhost:19101', // Override Print Bridge agent URL (else auto-discovered)
+  bridgePrinterId: 'winspool-abcd', // Pin a specific printer ID returned by the agent
   debug: true,              // Log to console
 })
 ```
@@ -386,22 +392,31 @@ this.posPrint.registerDriver(new CapacitorBluetoothAdapter());
 
 ---
 
-## Windows setup (for USB)
+## Windows setup (recommended path)
 
-On Windows, the default `usbprint.sys` driver blocks WebUSB access. You need to replace it with the **WinUSB** driver.
+On Windows, the **recommended setup** is the [Print Bridge agent](https://github.com/gmetenou7/POS-PRINTER-DRIVER-FOR-NGX-POS-PRINT-IN-WINDOWS) — a small Windows service that runs locally and handles every channel (USB, network, serial, Bluetooth) for you. With it installed, the `bridge` driver:
 
-**Use the companion installer:** [POS Printer Driver Installer for Windows](https://github.com/gmetenou7/POS-PRINTER-DRIVER-FOR-NGX-POS-PRINT-IN-WINDOWS)
+- Works in **every browser** (Chrome, Edge, Firefox, Safari, even from HTTPS sites)
+- Needs **no driver swap** for USB printers — the agent uses `WritePrinter` RAW behind the scenes, so any printer installed in Windows just works
+- Auto-detects network printers (TCP 9100 scan + mDNS)
+- **Never opens the Windows print dialog**
 
 ```
-1. Download POS-Printer-Driver-Installer.exe
-2. Plug in your POS printer
-3. Run the installer and select your printer
-4. Done — WebUSB now works!
+1. Download PrintBridge-Setup-X.Y.Z.exe from the releases page
+2. Double-click it — UAC prompt, then automatic install (~5 s)
+3. In your Angular app: providePosPrint({ driver: 'bridge' })
+4. Done — works on every USB / network / serial thermal printer
 ```
 
-> This only needs to be done **once per printer**. The change survives reboots.
+> The agent is a single Windows service. Install it once per machine, then **any** ngx-pos-print app on that machine can use the `bridge` driver.
 
 ---
+
+### Alternative: WebUSB on Windows (no agent)
+
+If you don't want to install the Print Bridge agent on the user's machine, you can still use **WebUSB** directly — but the default Windows `usbprint.sys` driver blocks WebUSB access, so you must replace it with **WinUSB** for each USB printer. The same companion repo ships a [legacy WinUSB installer](https://github.com/gmetenou7/POS-PRINTER-DRIVER-FOR-NGX-POS-PRINT-IN-WINDOWS) (in `git log`, before the multi-channel rewrite) that handles this.
+
+This path works but has trade-offs vs. the agent: it requires Chromium-based browsers, breaks `usbprint.sys` for the device (which prevents other Windows apps from using it as a regular printer), and the user has to re-grant the WebUSB permission per browser profile.
 
 ## Linux setup (for USB)
 
@@ -424,7 +439,7 @@ echo "blacklist usblp" | sudo tee /etc/modprobe.d/no-usblp.conf
 
 Then unplug and replug the printer.
 
-> **Windows (USB)**: You **must** install the WinUSB driver first. See [POS Printer Driver Installer for Windows](https://github.com/gmetenou7/POS-PRINTER-DRIVER-FOR-NGX-POS-PRINT-IN-WINDOWS).  
+> **Windows**: install [Print Bridge](https://github.com/gmetenou7/POS-PRINTER-DRIVER-FOR-NGX-POS-PRINT-IN-WINDOWS) (recommended) or fall back to the WebUSB path with the legacy WinUSB swap.  
 > **macOS**: no extra setup needed.  
 > **Android**: no extra setup needed.
 
@@ -505,54 +520,53 @@ A: Any ESC/POS compatible thermal printer. This includes most POS printers: Epso
 
 ---
 
-## Ecosystem — do I need the driver installer?
+## Ecosystem
 
-`ngx-pos-print` works on **all platforms** (Windows, macOS, Linux, Android). But on **Windows only**, USB printing requires an extra one-time step.
-
-### Why?
-
-Windows ships with a driver called `usbprint.sys` that takes **exclusive control** of USB printers. This blocks WebUSB from accessing the printer. The companion project replaces that driver with **WinUSB**, which allows the browser to communicate directly with the printer.
-
-### When do I need it?
-
-| Platform | USB | Bluetooth | Network | Browser |
-|----------|:---:|:---------:|:-------:|:-------:|
-| **Windows** | **Driver needed** | No setup | No setup | No setup |
-| **macOS** | No setup | No setup | No setup | No setup |
-| **Linux** | udev rules (see above) | No setup | No setup | No setup |
-| **Android** | No setup | No setup | No setup | No setup |
-
-> **Only Windows + USB** requires the driver installer. All other combinations work out of the box.
+`ngx-pos-print` works on **all platforms** (Windows, macOS, Linux, Android). On **Windows**, the recommended path uses a small companion agent called **Print Bridge** that runs as a local service and exposes every printer channel through a single HTTP API.
 
 ### The two projects
 
 | Project | What it does | When you need it |
 |---------|-------------|-----------------|
-| **[ngx-pos-print](https://github.com/gmetenou7/NGX-POS-PRINT)** | Angular library that sends ESC/POS commands to thermal printers via USB, Bluetooth, Network, or browser print | **Always** — this is the library you install in your Angular app |
-| **[POS Printer Driver Installer](https://github.com/gmetenou7/POS-PRINTER-DRIVER-FOR-NGX-POS-PRINT-IN-WINDOWS)** | One-click installer that replaces the Windows USB driver with WinUSB | **Only on Windows**, and **only if you use USB printing** |
+| **[ngx-pos-print](https://github.com/gmetenou7/NGX-POS-PRINT)** | Angular library that sends ESC/POS commands to thermal printers via Bridge, USB, Bluetooth, Network, or browser print | **Always** — this is the library you install in your Angular app |
+| **[Print Bridge](https://github.com/gmetenou7/POS-PRINTER-DRIVER-FOR-NGX-POS-PRINT-IN-WINDOWS)** | Windows service that auto-detects every thermal printer on the machine (USB driver, USB direct, network, serial, Bluetooth) and exposes them through a local HTTPS+HTTP API. Includes a tray icon and a self-elevating installer. | **Recommended on Windows** — install once per machine, then every Angular app using `driver: 'bridge'` just works |
+
+### Setup matrix
+
+| Platform | Recommended | Alternative |
+|----------|-------------|-------------|
+| **Windows** | Install Print Bridge, use `driver: 'bridge'` | WebUSB with legacy WinUSB swap |
+| **macOS**   | No setup, use `driver: 'usb'` (WebUSB) | — |
+| **Linux**   | No setup, use `driver: 'usb'` after `udev` rule | — |
+| **Android** | No setup, use `driver: 'usb'` or `'bluetooth'` | — |
 
 ```
-                        ┌─────────────────────────────────┐
-                        │        Your Angular App          │
-                        └──────────────┬──────────────────┘
-                                       │
-                                       ▼
-                        ┌─────────────────────────────────┐
-                        │         ngx-pos-print            │
-                        │  (npm install ngx-pos-print)     │
-                        └──┬──────┬──────────┬──────────┘
-                           │      │          │       │
-                         USB  Bluetooth  Network  Browser
-                           │      │          │       │
-                           ▼      ▼          ▼       ▼
-                       Printer  Printer   Printer  OS Dialog
-                           ▲
-                           │
-              ┌────────────┴─────────────┐
-              │  POS Printer Driver       │
-              │  Installer (Windows only) │
-              │  Run once per printer     │
-              └──────────────────────────┘
+                        ┌────────────────────────────────────┐
+                        │         Your Angular App           │
+                        └────────────────┬───────────────────┘
+                                         │
+                                         ▼
+                        ┌────────────────────────────────────┐
+                        │           ngx-pos-print            │
+                        │     (npm install ngx-pos-print)    │
+                        └─┬───────┬────────┬────────┬───────┘
+                          │       │        │        │       │
+                       Bridge   USB    Bluetooth Network  Browser
+                       (HTTP)  (WebUSB) (WebBT) (WebSocket)
+                          │       │        │        │       │
+                          ▼       ▼        ▼        ▼       ▼
+                     ┌─────────┐ Printer Printer Printer OS Dialog
+                     │  Print  │
+                     │ Bridge  │
+                     │  agent  │  (Windows only)
+                     └────┬────┘
+                          │
+                     ┌────┴────────────────────────┐
+                     │   winspool RAW              │
+                     │   libusb (WinUSB-bound)     │
+                     │   TCP 9100 / mDNS           │
+                     │   Serial / Bluetooth-SPP    │
+                     └─────────────────────────────┘
 ```
 
 ---
