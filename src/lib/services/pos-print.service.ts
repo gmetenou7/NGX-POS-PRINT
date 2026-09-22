@@ -14,7 +14,7 @@ import { WindowPrintService } from './window-print.service';
  *
  * **Designed for POS/cash register apps:**
  * - Settings screen: call `requestPairing()` once to authorize a printer
- * - POS screen: call `printLines()` — prints directly, no popups, no dialogs
+ * - POS screen: call `printLines()`, prints directly, no popups, no dialogs
  *
  * Configure the default driver via `providePosPrint({ driver: 'usb' })`
  * so all print calls use that driver without auto-detection.
@@ -94,7 +94,7 @@ export class PosPrintService {
 
   /**
    * Opens the browser device picker to authorize a USB or Bluetooth printer.
-   * **Call this from a settings/admin screen — never from the POS screen.**
+   * **Call this from a settings/admin screen, never from the POS screen.**
    * After pairing, all print methods work silently.
    *
    * Automatically saves the paired driver as the preferred driver.
@@ -113,7 +113,7 @@ export class PosPrintService {
 
   /**
    * Scans all drivers and returns detected printers.
-   * **100% silent — never opens a picker.**
+   * **100% silent, never opens a picker.**
    */
   async detect(): Promise<DetectedPrinter[]> {
     const customResults = await Promise.all(
@@ -177,7 +177,7 @@ export class PosPrintService {
    * - Otherwise: builds ESC/POS commands and sends directly to the printer
    *
    * **Never falls back to window.print() silently.**
-   * If USB is configured and fails, you get an error — not a surprise browser dialog.
+   * If USB is configured and fails, you get an error, not a surprise browser dialog.
    */
   async printLines(lines: PrintLine[], config?: PosPrintConfig): Promise<PrintResult> {
     const merged = { ...this.config, ...config };

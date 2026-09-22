@@ -28,7 +28,7 @@ export class UsbPrintService {
 
   /**
    * Checks if a USB printer is already authorized in this browser.
-   * Does NOT open a picker — only checks previously paired devices.
+   * Does NOT open a picker, only checks previously paired devices.
    */
   async isConnected(): Promise<boolean> {
     if (!this.isAvailable()) return false;

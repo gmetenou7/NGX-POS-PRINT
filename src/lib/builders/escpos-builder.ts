@@ -107,7 +107,7 @@ export class EscPosBuilder {
    * @param text - Optional text to print in double size
    */
   doubleSize(text?: string): this {
-    // GS ! n — bit 0-3: width multiplier, bit 4-7: height multiplier
+    // GS ! n, bit 0-3: width multiplier, bit 4-7: height multiplier
     // 0x11 = width x2, height x2
     this.buffers.push(new Uint8Array([GS, 0x21, 0x11]));
     if (text !== undefined) {
@@ -125,7 +125,7 @@ export class EscPosBuilder {
 
   /**
    * Prints text content encoded as bytes.
-   * Does NOT append a newline — use `.newLine()` after if needed.
+   * Does NOT append a newline, use `.newLine()` after if needed.
    * @param content - Text string to print
    */
   text(content: string): this {
