@@ -1,5 +1,12 @@
 import { Injectable, inject } from '@angular/core';
-import type { DetectedPrinter, PrintResult } from '../models/print.models';
+import type {
+  DetectedPrinter,
+  DocumentPrintOptions,
+  DocumentPrintResult,
+  HostPrinter,
+  PrinterCapabilities,
+  PrintResult,
+} from '../models/print.models';
 import { POS_PRINT_CONFIG } from '../providers/pos-print.providers';
 
 /** Ports the bridge driver probes when no base URL is set. */
@@ -14,15 +21,6 @@ const PROBE_BASES = [
 const PROBE_TIMEOUT = 600;
 /** sessionStorage key for the cached working base URL. */
 const CACHE_KEY = 'ngx-pos-print:bridge-base';
-
-interface BridgePrinter {
-  id: string;
-  name: string;
-  channel: string;
-  isThermal: boolean;
-  isDefault: boolean;
-  status: 'ready' | 'printing' | 'offline' | 'error' | 'paused' | 'unknown';
-}
 
 /**
  * Print driver that delegates to a local Print Bridge agent
@@ -59,7 +57,7 @@ export class BridgePrintService {
     try {
       const r = await fetch(`${base}/printers`);
       if (!r.ok) return [];
-      const body = (await r.json()) as { printers?: BridgePrinter[] };
+      const body = (await r.json()) as { printers?: HostPrinter[] };
       const printers = body.printers ?? [];
       return printers
         .filter(p => p.isThermal)
@@ -70,6 +68,94 @@ export class BridgePrintService {
         }));
     } catch {
       return [];
+    }
+  }
+
+  /**
+   * Lists **every** printer the host can reach, not only thermal ones.
+   *
+   * `detect()` deliberately keeps only thermal printers, because it feeds the ESC/POS routing.
+   * This one keeps everything, because that is the list a print window has to show: office A4,
+   * dot matrix and receipt printers alike.
+   */
+  async listPrinters(): Promise<HostPrinter[]> {
+    const base = await this.resolveBase();
+    if (!base) return [];
+    try {
+      const r = await fetch(`${base}/printers`);
+      if (!r.ok) return [];
+      const body = (await r.json()) as { printers?: HostPrinter[] };
+      return body.printers ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Reads what a printer's driver says it can do: papers, trays, duplex, color, copies.
+   *
+   * Same source as the system's own settings window. An app can therefore offer exactly the
+   * options the machine honours, instead of offering some it will silently replace.
+   *
+   * Returns null for a printer with no host driver to query, a receipt printer on raw USB for
+   * instance: it has no options to offer, and that is an answer rather than a failure.
+   */
+  async capabilities(printerId: string): Promise<PrinterCapabilities | null> {
+    const base = await this.resolveBase();
+    if (!base) return null;
+    try {
+      const r = await fetch(`${base}/printers/${encodeURIComponent(printerId)}/capabilities`);
+      if (!r.ok) return null;
+      const body = (await r.json()) as { ok?: boolean; driverless?: boolean; capabilities?: PrinterCapabilities };
+      if (!body.ok || body.driverless || !body.capabilities) return null;
+      return body.capabilities;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Prints a page document: an invoice, a delivery note, anything meant for a sheet of paper.
+   *
+   * Pages are sent **already rendered**, one image each. Whoever prints usually shows a preview
+   * first, so that rendering already exists on their side; doing it again in the agent would
+   * mean embedding a PDF engine in it, and losing the single self-contained executable.
+   *
+   * No dialog opens. The options travel in the driver's own settings structure, which is the
+   * whole point of the agent.
+   *
+   * @param pages one image per page, base64 or a `data:` URL straight from a canvas
+   */
+  async printDocument(pages: string[], options: DocumentPrintOptions = {}): Promise<DocumentPrintResult> {
+    const t0 = Date.now();
+    const base = await this.resolveBase();
+    if (!base) {
+      return {
+        success: false,
+        pages: 0,
+        error: 'Print Bridge agent unreachable. Is it installed and running?',
+        timestamp: t0,
+      };
+    }
+    if (pages.length === 0) {
+      return { success: false, pages: 0, error: 'No page to print.', timestamp: t0 };
+    }
+
+    try {
+      const { printerId, jobName, ...rest } = options;
+      const r = await fetch(`${base}/print-document`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ printerId, jobName, pages, options: rest }),
+      });
+      const json = (await r.json().catch(() => ({}))) as { ok?: boolean; pages?: number; error?: string };
+      if (!r.ok || json.ok === false) {
+        return { success: false, pages: json.pages ?? 0, error: json.error ?? `HTTP ${r.status}`, timestamp: t0 };
+      }
+      return { success: true, pages: json.pages ?? pages.length, timestamp: t0 };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { success: false, pages: 0, error: message, timestamp: t0 };
     }
   }
 

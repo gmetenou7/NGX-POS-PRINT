@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.2.1 (2026-09-22)
+
+### Bug Fixes
+
+- **Packaging**: 1.2.0 was published from the repository root instead of `dist/`, so the
+  manifest that shipped had no `module`, `typings` or `exports` and the package resolved to
+  nothing. Republished from `dist/`, and a `prepublishOnly` guard now refuses a publish from
+  the root. **Use 1.2.1; 1.2.0 is unusable.**
+
+## 1.2.0 (2026-09-22)
+
+### Features
+
+- **Documents**: `printDocument()` prints A4 and other page documents through the local agent,
+  silently. Pages are sent already rendered, one image each, so the agent needs no PDF engine
+  and stays a single self-contained executable.
+- **Capabilities**: `capabilities(printerId)` reads what a printer's driver declares it can do:
+  papers, trays, duplex, color, maximum copies, resolution and printable area. Same source as
+  the system's own settings window, so an app can offer exactly the options the machine honours.
+- **Printer list**: `listPrinters()` returns every printer the host can reach, not only thermal
+  ones. `detect()` keeps its thermal-only filter, since it feeds the ESC/POS routing.
+- **Types**: `HostPrinter`, `PrinterOption`, `PrinterCapabilities`, `DocumentPrintOptions` and
+  `DocumentPrintResult` are exported.
+
+### Notes
+
+- Requires Print Bridge agent 1.1 or later for the two new endpoints
+  (`GET /printers/{id}/capabilities`, `POST /print-document`).
+- Together these let a web app replace the system print dialog entirely: printer list, color,
+  duplex, tray, paper, copies and pages chosen in the page, and the document printed with no
+  window opening at all.
+
 ## 1.0.1 (2026-04-07)
 
 ### Bug Fixes

@@ -320,6 +320,79 @@ const data = new EscPosBuilder(80)   // 80mm or 58mm paper
 
 ---
 
+## A4 documents: replace the print dialog entirely
+
+Receipt printers take a byte stream, so this library writes ESC/POS and sends it. An office A4
+printer is a different animal: it needs a page description, and on Windows its driver is what
+produces one. That is why printing an invoice still opened the system dialog.
+
+With the **Print Bridge agent** installed, it no longer has to. Your page can show the printer
+list, the colour, the duplex, the tray, the paper and the copies, and print with no window
+opening at all.
+
+```ts
+import { BridgePrintService } from 'ngx-pos-print';
+
+private bridge = inject(BridgePrintService);
+
+// 1. Every printer the machine can reach, A4 and dot matrix included.
+//    `detect()` keeps only thermal ones, because it feeds the ESC/POS routing.
+const printers = await this.bridge.listPrinters();
+const drivable = printers.filter(p => p.channel === 'winspool');
+
+// 2. What that printer's driver actually offers. Same source as the system's
+//    own settings window, so you never offer an option it will silently replace.
+const caps = await this.bridge.capabilities(drivable[0].id);
+//    → { papers: [{id: 9, name: 'A4'}], bins: [...], duplex: true,
+//        color: true, maxCopies: 99, dpi: 600, widthPx: 4958, heightPx: 7016 }
+
+// 3. Print. No dialog.
+await this.bridge.printDocument(pages, {
+  printerId: drivable[0].id,
+  jobName: 'INV-2026-000123',
+  copies: 2,
+  color: false,
+  duplex: 'long',
+  bin: 1,
+  paper: 9,
+});
+```
+
+### Pages are sent already rendered
+
+`pages` is one image per page, base64 or a `data:` URL straight from a canvas. Whoever prints
+almost always shows a preview first, so that rendering already exists on your side. Reusing it
+keeps the agent free of a PDF engine, which is what keeps it a single self-contained executable.
+
+Rendering a PDF to images is a few lines with `pdf.js`:
+
+```ts
+const pdf = await pdfjsLib.getDocument({ data }).promise;
+const pages: string[] = [];
+for (let n = 1; n <= pdf.numPages; n++) {
+  const page = await pdf.getPage(n);
+  // A PDF measures in points, 72 per inch. Scale 3 gives 216 dpi, past what the
+  // eye picks out on plain paper, and about 2 MB an A4 page over a local link.
+  const viewport = page.getViewport({ scale: 3 });
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvas, canvasContext: canvas.getContext('2d')!, viewport }).promise;
+  pages.push(canvas.toDataURL('image/png'));
+}
+```
+
+The trade-off is stated plainly: what comes out is an image of the page, not vector text. On
+paper, at that resolution, the difference does not show.
+
+### What this needs
+
+- **Print Bridge agent 1.1 or later** on the machine. Without it, `listPrinters()` returns an
+  empty list and you fall back to `window.print()`, as before.
+- The printer **installed in Windows**, so it has a driver to drive. A receipt printer on raw
+  USB, serial or network has no driver to query: `capabilities()` returns null, and page
+  documents go to `/print` as a byte stream instead.
+
 ## Configuration
 
 ```typescript

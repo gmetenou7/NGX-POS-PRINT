@@ -13,6 +13,11 @@ export type {
   PrintResult,
   DetectedPrinter,
   PrintDriverAdapter,
+  HostPrinter,
+  PrinterOption,
+  PrinterCapabilities,
+  DocumentPrintOptions,
+  DocumentPrintResult,
 } from './lib/models/print.models';
 
 // Providers

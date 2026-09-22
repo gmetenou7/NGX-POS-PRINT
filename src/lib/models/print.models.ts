@@ -158,3 +158,75 @@ export interface PrintDriverAdapter {
   /** Closes the connection to the printer. */
   disconnect(): Promise<void>;
 }
+
+// ─── Documents de page (A4, via l'agent local) ──────────────────────────────
+
+/**
+ * Une imprimante vue par l'agent local, quel que soit son type.
+ *
+ * Différent de `DetectedPrinter`, qui ne décrit que les thermiques retenues pour le routage
+ * ESC/POS. Ici on garde tout ce que la machine hôte sait atteindre, y compris les bureautiques
+ * A4 et les matricielles, parce que c'est cette liste que présente une fenêtre d'impression.
+ */
+export interface HostPrinter {
+  id: string;
+  name: string;
+  /** Par où l'agent la joint : `winspool`, `libusb`, `network`, `serial`, `bluetooth`. */
+  channel: string;
+  port?: string;
+  driver?: string;
+  vendor?: string;
+  model?: string;
+  /** Vrai pour une thermique à ticket, qui attend un flux ESC/POS et non une page. */
+  isThermal: boolean;
+  isDefault: boolean;
+  status: 'ready' | 'printing' | 'offline' | 'error' | 'paused' | 'unknown';
+}
+
+/** Un réglage proposé par le pilote : son numéro, et le nom qu'il porte à l'écran. */
+export interface PrinterOption {
+  id: number;
+  name: string;
+}
+
+/**
+ * Ce qu'une imprimante déclare savoir faire, lu dans son pilote.
+ *
+ * Même source que la fenêtre de réglages du système. C'est ce qui permet à une application web
+ * de n'offrir que des options réelles, au lieu d'en proposer que la machine remplacera sans
+ * rien dire.
+ */
+export interface PrinterCapabilities {
+  papers: PrinterOption[];
+  bins: PrinterOption[];
+  duplex: boolean;
+  color: boolean;
+  maxCopies: number;
+  /** Résolution et surface imprimable, pour rendre les pages à la bonne taille. */
+  dpi: number;
+  widthPx: number;
+  heightPx: number;
+}
+
+/** Options d'un document de page, telles qu'elles partiront au pilote. */
+export interface DocumentPrintOptions {
+  printerId?: string;
+  jobName?: string;
+  copies?: number;
+  color?: boolean;
+  duplex?: 'none' | 'long' | 'short';
+  /** Numéro de bac, pris dans `PrinterCapabilities.bins`. */
+  bin?: number;
+  /** Numéro de format, pris dans `PrinterCapabilities.papers`. */
+  paper?: number;
+  landscape?: boolean;
+}
+
+/** Résultat d'une impression de document. */
+export interface DocumentPrintResult {
+  success: boolean;
+  /** Pages effectivement envoyées au pilote. */
+  pages: number;
+  error?: string;
+  timestamp: number;
+}
