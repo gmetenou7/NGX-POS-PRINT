@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.2 (2026-09-22)
+
+### Bug Fixes
+
+- **Timeouts**: every agent call is now bounded (8s to list, 20s for capabilities, 120s to
+  print). A fetch with no timeout never gives up, and the agent talks to real hardware that goes
+  quiet: an unplugged printer whose queue is still declared keeps its driver waiting, and a
+  caller that waits with it shows a spinner that never stops. Seen in the field as a five-minute
+  "searching for printers" that only a page reload cleared.
+
 ## 1.2.1 (2026-09-22)
 
 ### Bug Fixes

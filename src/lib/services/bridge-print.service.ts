@@ -19,6 +19,18 @@ const PROBE_BASES = [
 
 /** Quick liveness probe timeout, ms. */
 const PROBE_TIMEOUT = 600;
+
+/**
+ * Per-request timeouts, ms.
+ *
+ * A fetch with no timeout never gives up. The agent talks to real hardware, and hardware goes
+ * quiet: an unplugged printer whose queue is still declared keeps its driver waiting, and a
+ * caller that waits with it shows a spinner that never stops. Every call is therefore bounded,
+ * and a bounded failure is one a page can report.
+ */
+const LIST_TIMEOUT = 8_000;
+const CAPABILITIES_TIMEOUT = 20_000;
+const PRINT_TIMEOUT = 120_000;
 /** sessionStorage key for the cached working base URL. */
 const CACHE_KEY = 'ngx-pos-print:bridge-base';
 
@@ -82,7 +94,7 @@ export class BridgePrintService {
     const base = await this.resolveBase();
     if (!base) return [];
     try {
-      const r = await fetch(`${base}/printers`);
+      const r = await this.fetchWithTimeout(`${base}/printers`, LIST_TIMEOUT);
       if (!r.ok) return [];
       const body = (await r.json()) as { printers?: HostPrinter[] };
       return body.printers ?? [];
@@ -104,7 +116,8 @@ export class BridgePrintService {
     const base = await this.resolveBase();
     if (!base) return null;
     try {
-      const r = await fetch(`${base}/printers/${encodeURIComponent(printerId)}/capabilities`);
+      const r = await this.fetchWithTimeout(
+        `${base}/printers/${encodeURIComponent(printerId)}/capabilities`, CAPABILITIES_TIMEOUT);
       if (!r.ok) return null;
       const body = (await r.json()) as { ok?: boolean; driverless?: boolean; capabilities?: PrinterCapabilities };
       if (!body.ok || body.driverless || !body.capabilities) return null;
@@ -143,7 +156,7 @@ export class BridgePrintService {
 
     try {
       const { printerId, jobName, ...rest } = options;
-      const r = await fetch(`${base}/print-document`, {
+      const r = await this.fetchWithTimeout(`${base}/print-document`, PRINT_TIMEOUT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ printerId, jobName, pages, options: rest }),
@@ -202,6 +215,17 @@ export class BridgePrintService {
   }
 
   // --- internals -----------------------------------------------------------
+
+  /** A fetch that gives up, so a silent agent cannot hold a caller forever. */
+  private async fetchWithTimeout(url: string, timeout: number, init?: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   /**
    * Returns the first base URL that answers /health, or null.

@@ -1,6 +1,6 @@
 {
   "name": "ngx-pos-print",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Angular library for POS and document printing, thermal receipts over Bluetooth, Network, USB or a local agent, and A4 documents printed silently through the host's own drivers.",
   "license": "MIT",
   "author": "Gildas",
