@@ -48,7 +48,7 @@ Your Angular App  --->  ngx-pos-print  --->  Thermal Printer
 
 | Connection    | Chrome / Edge | Android Chrome | Android Capacitor | Firefox / Safari | iOS    |
 |---------------|:------------:|:--------------:|:-----------------:|:----------------:|:------:|
-| **Bridge**    | Yes (Windows) |,              |,                 | Yes (Windows)    |,      |
+| **Bridge**    | Yes (Windows) | No             | No                | Yes (Windows)    | No     |
 | **USB**       | Yes          | Yes (OTG)      | Custom driver      | No               | No     |
 | **Bluetooth** | Yes          | Yes            | Custom driver      | No               | No     |
 | **Network**   | Yes          | Yes            | Yes                | Yes              | Yes    |
@@ -385,6 +385,38 @@ for (let n = 1; n <= pdf.numPages; n++) {
 The trade-off is stated plainly: what comes out is an image of the page, not vector text. On
 paper, at that resolution, the difference does not show.
 
+### Every agent call is bounded in time
+
+Since **1.2.2**, no call to the agent can hang forever.
+
+| Call | Limit | Why that much |
+|------|-------|---------------|
+| `isAvailable()` | 0.6 s | A liveness probe. Either an agent answers at once, or there is none. |
+| `listPrinters()` | 8 s | Enumerating queues is a local operation, but one dead queue can stall it. |
+| `capabilities()` | 20 s | The driver is questioned for real, and a network printer may be asleep. |
+| `printDocument()` | 120 s | A twenty-page colour job at 600 dpi genuinely takes that long to spool. |
+
+This matters for your interface, not just for the library. A `fetch` with no timeout never gives
+up: an unplugged printer whose queue is still declared keeps its driver waiting, and the caller
+waits with it. In the field that showed up as a five-minute "searching for printers" that only a
+page reload cleared, with nothing on screen to say anything was wrong.
+
+A bounded failure is a failure your page can announce. Each of these calls now rejects, so wrap
+them and tell the operator:
+
+```ts
+try {
+  this.printers = await this.bridge.listPrinters();
+} catch {
+  // Times out after 8s rather than spinning forever.
+  this.error = 'No answer from the print agent. Is it running?';
+}
+```
+
+While a refresh is in flight, lock the printer selector. Letting someone pick a second printer
+while the first one's capabilities are still being read gets you options from one device applied
+to another.
+
 ### What this needs
 
 - **Print Bridge agent 1.1 or later** on the machine. Without it, `listPrinters()` returns an
@@ -574,7 +606,13 @@ export class PosComponent {
 ## FAQ
 
 **Q: Does the user need to install anything?**  
-A: No. Nothing. It works directly in the browser.
+A: For thermal receipts, no. USB, Bluetooth and network printing all run in the browser, nothing
+to install.
+
+For **A4 documents printed without the system dialog**, yes: the Print Bridge agent, once per
+machine. An office printer needs its driver to produce a page description, and a web page cannot
+reach a driver. Without the agent the library falls back to `window.print()`, so nothing breaks,
+you just get the system window back.
 
 **Q: Does it work on Android tablets?**  
 A: Yes. USB (via OTG cable) and Bluetooth both work on Chrome for Android.
@@ -609,9 +647,9 @@ A: Any ESC/POS compatible thermal printer. This includes most POS printers: Epso
 | Platform | Recommended | Alternative |
 |----------|-------------|-------------|
 | **Windows** | Install Print Bridge, use `driver: 'bridge'` | WebUSB with legacy WinUSB swap |
-| **macOS**   | No setup, use `driver: 'usb'` (WebUSB) |, |
-| **Linux**   | No setup, use `driver: 'usb'` after `udev` rule |, |
-| **Android** | No setup, use `driver: 'usb'` or `'bluetooth'` |, |
+| **macOS**   | No setup, use `driver: 'usb'` (WebUSB) | None |
+| **Linux**   | No setup, use `driver: 'usb'` after `udev` rule | None |
+| **Android** | No setup, use `driver: 'usb'` or `'bluetooth'` | None |
 
 ```
                         ┌────────────────────────────────────┐
