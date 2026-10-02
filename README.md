@@ -401,15 +401,20 @@ up: an unplugged printer whose queue is still declared keeps its driver waiting,
 waits with it. In the field that showed up as a five-minute "searching for printers" that only a
 page reload cleared, with nothing on screen to say anything was wrong.
 
-A bounded failure is a failure your page can announce. Each of these calls now rejects, so wrap
-them and tell the operator:
+A bounded failure is a failure your page can announce. These calls do not reject: on failure
+`listPrinters()` returns an empty list, `capabilities()` returns null, and `printDocument()`
+resolves with `success: false`. Since **1.3.0**, `bridge.lastError` (or `errorCode` on a print
+result) tells you why, so you can tell the operator what to do:
 
 ```ts
-try {
-  this.printers = await this.bridge.listPrinters();
-} catch {
-  // Times out after 8s rather than spinning forever.
-  this.error = 'No answer from the print agent. Is it running?';
+this.printers = await this.bridge.listPrinters();
+if (this.printers.length === 0) {
+  switch (this.bridge.lastError) {
+    case 'agent_unreachable':  this.error = 'No answer from the print agent. Is it running?'; break;
+    case 'pairing_required':   this.error = 'This page is not paired with the print agent.'; break;
+    case 'origin_not_allowed': this.error = 'The print agent does not allow this website.'; break;
+    // null: the agent answered, it simply has no printer to offer.
+  }
 }
 ```
 
@@ -421,6 +426,8 @@ to another.
 
 - **Print Bridge agent 1.1 or later** on the machine. Without it, `listPrinters()` returns an
   empty list and you fall back to `window.print()`, as before.
+- Your site **on the agent's allowed origins, and paired** with it. See
+  [Pairing with the Print Bridge agent](#pairing-with-the-print-bridge-agent-130).
 - The printer **installed in Windows**, so it has a driver to drive. A receipt printer on raw
   USB, serial or network has no driver to query: `capabilities()` returns null, and page
   documents go to `/print` as a byte stream instead.
@@ -437,6 +444,7 @@ providePosPrint({
   bluetoothServiceUUID: '...', // Override Bluetooth service UUID
   bridgeBaseUrl: 'https://localhost:19101', // Override Print Bridge agent URL (else auto-discovered)
   bridgePrinterId: 'winspool-abcd', // Pin a specific printer ID returned by the agent
+  bridgeToken: '<random, 32+ chars>', // Pairing token sent to the agent (see "Pairing with the Print Bridge agent")
   debug: true,              // Log to console
 })
 ```
@@ -509,11 +517,76 @@ On Windows, the **recommended setup** is the [Print Bridge agent](https://github
 ```
 1. Download PrintBridge-Setup-X.Y.Z.exe from the releases page
 2. Double-click it, UAC prompt, then automatic install (~5 s)
-3. In your Angular app: providePosPrint({ driver: 'bridge' })
-4. Done, works on every USB / network / serial thermal printer
+3. Make sure your site's origin is on the agent's allowed list (installer option -AllowedOrigins)
+4. In your Angular app: providePosPrint({ driver: 'bridge' }), then pair once (see below)
+5. Done, works on every USB / network / serial thermal printer
 ```
 
-> The agent is a single Windows service. Install it once per machine, then **any** ngx-pos-print app on that machine can use the `bridge` driver.
+> The agent is a single Windows service. Install it once per machine, then **any** ngx-pos-print app on that machine, served from an allowed origin and paired, can use the `bridge` driver.
+
+### Pairing with the Print Bridge agent (1.3.0+)
+
+The agent listens on `127.0.0.1`, and any web page open on the machine can call `127.0.0.1`.
+Without a guard, any website visited from the till could print fake receipts or open the cash
+drawer. So since agent 1.1 it only serves **web origins on its allow list**, and only to a page
+that **paired**: the page generates a random token, registers it once, and every later call
+carries it in the `X-Print-Bridge-Token` header.
+
+```typescript
+import { BridgePrintService } from 'ngx-pos-print';
+
+private bridge = inject(BridgePrintService);
+
+async ensurePaired() {
+  // 32 to 512 printable characters, random. Generate it once and keep it.
+  let token = localStorage.getItem('printBridgeToken');
+  if (!token) {
+    token = crypto.randomUUID() + crypto.randomUUID();
+    localStorage.setItem('printBridgeToken', token);
+  }
+  this.bridge.setBridgeToken(token);
+
+  switch (await this.bridge.pairingStatus()) {
+    case 'unpaired': {
+      const r = await this.bridge.pairBridge(token);
+      if (!r.success) console.error('Pairing failed:', r.errorCode ?? r.error);
+      break;
+    }
+    case 'absent':  /* no agent: install or start it */ break;
+    case 'legacy':  /* agent older than 1.1: nothing to do */ break;
+    case 'paired':  break;
+  }
+}
+```
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `pairBridge(token?)` | `Promise<BridgePairResult>` | Registers the token (defaults to the current one) with the agent, then uses it. Only accepted from an allowed origin. Pairing twice is harmless |
+| `unpairBridge()` | `Promise<BridgePairResult>` | Removes the current token from the agent. It stays set locally until `setBridgeToken(null)` |
+| `setBridgeToken(token)` / `getBridgeToken()` | `void` / `string \| null` | Sets or reads the token sent on every call. Can also come from the `bridgeToken` config option |
+| `pairingStatus()` | `Promise<BridgePairingStatus>` | `'absent'` (no agent), `'legacy'` (agent older than 1.1, no pairing), `'unpaired'`, `'paired'` |
+| `lastError` | `BridgeErrorCode \| null` | Why the last list / capabilities / print call failed; null after a success |
+
+**Typed errors.** `PrintResult.errorCode`, `DocumentPrintResult.errorCode`, `BridgePairResult.errorCode`
+and `lastError` share one type, `BridgeErrorCode`:
+
+| Code | Meaning | What to tell the operator |
+|------|---------|---------------------------|
+| `agent_unreachable` | No agent answered | Install or start Print Bridge |
+| `pairing_required` | The agent answered but does not know this token | Pair again |
+| `origin_not_allowed` | The agent refuses this website | Add the site to the agent's allowed origins |
+
+**Compatibility.** The token header is only sent to an agent whose `/health` announces
+`pairingRequired`. An older agent does not allow that header at preflight, so the browser would
+block every call: with it, the library keeps working exactly as before, and `pairingStatus()`
+returns `'legacy'`.
+
+**Fallback ports.** When 19100 / 19101 are taken by another program, the agent moves to
+19102 / 19103. A call that fails without reaching the agent forgets the cached address, and the
+next call probes again and finds it there.
+
+> "Pairing" here means pairing the **page with the agent**. It has nothing to do with
+> `requestPairing('usb' | 'bluetooth')`, which pairs a **printer with the browser**.
 
 ---
 
@@ -623,6 +696,11 @@ A: The library detects this automatically. On Firefox or Safari, use Network (We
 **Q: Is the printer pairing permanent?**  
 A: Yes. It survives browser restarts, device reboots, and app updates. The user pairs once, then never again.
 
+**Q: Why does the Print Bridge agent answer but list no printer?**  
+A: Check `bridge.lastError`. With agent 1.1 and later, `pairing_required` means the page must pair
+again with `pairBridge()` (new browser profile, cleared storage, reinstalled agent), and
+`origin_not_allowed` means your site is not on the agent's allowed origins.
+
 **Q: Can I use this without Angular?**  
 A: No, this is an Angular library. For vanilla JS, look at `escpos` or `webusb-printer` packages.
 
@@ -691,3 +769,10 @@ A: Any ESC/POS compatible thermal printer. This includes most POS printers: Epso
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md)
+
+The tests in `test/` run against the built package, so build first:
+
+```bash
+npm run build
+npm test
+```
