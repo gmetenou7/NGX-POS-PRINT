@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.3.0 (2026-10-02)
+
+### Features
+
+- **Pairing with the Print Bridge agent**: agent 1.1 only serves web origins on its allow list,
+  and only to a page that paired. `BridgePrintService.pairBridge(token)` registers a random token
+  (32 characters or more) once; every later call carries it in `X-Print-Bridge-Token`.
+  `unpairBridge()`, `setBridgeToken()` / `getBridgeToken()`, the `bridgeToken` config option and
+  `pairingStatus()` (`absent`, `legacy`, `unpaired`, `paired`) complete it. Without this, any
+  website open on the till could print or open the cash drawer.
+- **Typed errors**: `PrintResult.errorCode` and `DocumentPrintResult.errorCode` tell
+  `pairing_required` (pair again) from `agent_unreachable` (install or start the agent);
+  `BridgePrintService.lastError` gives the same reason after `listPrinters()` or
+  `capabilities()`, which keep returning an empty answer.
+
+### Compatibility
+
+- The token header is only sent to an agent whose `/health` announces `pairingRequired`. An
+  older agent does not allow that header at preflight, so it keeps working unchanged.
+- A call that fails without reaching the agent forgets the cached address and probes again on
+  the next call, which finds an agent that moved to its fallback port (19102 / 19103).
+
 ## 1.2.2 (2026-09-22)
 
 ### Bug Fixes

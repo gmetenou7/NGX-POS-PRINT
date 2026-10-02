@@ -1,5 +1,8 @@
 import { Injectable, inject } from '@angular/core';
 import type {
+  BridgeErrorCode,
+  BridgePairingStatus,
+  BridgePairResult,
   DetectedPrinter,
   DocumentPrintOptions,
   DocumentPrintResult,
@@ -33,6 +36,9 @@ const CAPABILITIES_TIMEOUT = 20_000;
 const PRINT_TIMEOUT = 120_000;
 /** sessionStorage key for the cached working base URL. */
 const CACHE_KEY = 'ngx-pos-print:bridge-base';
+/** Header that carries the pairing token. */
+const TOKEN_HEADER = 'X-Print-Bridge-Token';
+const UNREACHABLE = 'Print Bridge agent unreachable. Is it installed and running?';
 
 /**
  * Print driver that delegates to a local Print Bridge agent
@@ -45,11 +51,124 @@ const CACHE_KEY = 'ngx-pos-print:bridge-base';
  * any browser-side device permissions or USB drivers.
  *
  * The bridge agent must be installed and running on the user's machine.
+ *
+ * <h4>Pairing (agent 1.1 and later)</h4>
+ *
+ * The agent only serves web origins on its allow list, and only to a page that paired: the page
+ * generates a random token, registers it once with `pairBridge(token)`, and every later call
+ * carries it in `X-Print-Bridge-Token`. A call the agent refuses for lack of a known token
+ * fails with `errorCode: 'pairing_required'`, distinct from `agent_unreachable`.
+ *
+ * The header is only sent to an agent whose `/health` announces `pairingRequired`: an older
+ * agent does not list it among its allowed CORS headers and the browser would block every call.
  */
 @Injectable({ providedIn: 'root' })
 export class BridgePrintService {
   private readonly config = inject(POS_PRINT_CONFIG, { optional: true }) ?? {};
   private cachedBase: string | null = null;
+  private token: string | null = this.config.bridgeToken || null;
+  /** What the agent's /health said: true when it wants a token, false for an older agent. */
+  private pairingRequired: boolean | null = null;
+  /** Why the last call failed, when the agent said so; null after a success. */
+  private lastErrorCode: BridgeErrorCode | null = null;
+
+  /** Sets (or clears) the pairing token sent on every agent call. */
+  setBridgeToken(token: string | null): void {
+    this.token = token || null;
+  }
+
+  /** The pairing token in use, or null. */
+  getBridgeToken(): string | null {
+    return this.token;
+  }
+
+  /**
+   * Why the last list / capabilities / print call failed, when it can be told:
+   * `pairing_required`, `origin_not_allowed` or `agent_unreachable`. Null after a success.
+   *
+   * `listPrinters()` and `capabilities()` keep returning an empty answer on failure, as before;
+   * this tells a caller whether to offer "pair again" or "install the agent".
+   */
+  get lastError(): BridgeErrorCode | null {
+    return this.lastErrorCode;
+  }
+
+  /**
+   * Registers a token with the agent, then uses it for every call.
+   *
+   * The agent accepts it only from a web origin on its allow list; it keeps a hash of it, and
+   * several tokens may be paired at once (one per browser profile). Pairing an already paired
+   * token is harmless.
+   *
+   * @param token 32 to 512 printable characters, random; defaults to the current token
+   */
+  async pairBridge(token: string | null = this.token): Promise<BridgePairResult> {
+    if (!token) return { success: false, error: 'No token to pair.' };
+    const base = await this.resolveBase();
+    if (!base) return this.pairFailure('agent_unreachable', UNREACHABLE);
+    try {
+      const r = await this.fetchWithTimeout(`${base}/pair`, LIST_TIMEOUT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      const json = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!r.ok || json.ok === false) {
+        const code = this.codeOf(r.status, json.error);
+        return { success: false, errorCode: code ?? undefined, error: json.error ?? `HTTP ${r.status}` };
+      }
+      this.token = token;
+      this.pairingRequired = true;
+      this.lastErrorCode = null;
+      return { success: true };
+    } catch (err) {
+      return this.pairFailure('agent_unreachable', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /** Removes the current token from the agent. The token stays set locally until `setBridgeToken(null)`. */
+  async unpairBridge(): Promise<BridgePairResult> {
+    if (!this.token) return { success: false, error: 'No token to unpair.' };
+    const base = await this.resolveBase();
+    if (!base) return this.pairFailure('agent_unreachable', UNREACHABLE);
+    try {
+      const r = await this.fetchWithTimeout(`${base}/pair`, LIST_TIMEOUT, {
+        method: 'DELETE',
+        headers: { [TOKEN_HEADER]: this.token },
+      });
+      const json = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!r.ok || json.ok === false) {
+        const code = this.codeOf(r.status, json.error);
+        return { success: false, errorCode: code ?? undefined, error: json.error ?? `HTTP ${r.status}` };
+      }
+      return { success: true };
+    } catch (err) {
+      return this.pairFailure('agent_unreachable', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /**
+   * Tells whether this page can use the agent: absent, older agent (no pairing), paired, or not.
+   */
+  async pairingStatus(): Promise<BridgePairingStatus> {
+    const base = await this.resolveBase();
+    if (!base) return 'absent';
+    if (this.pairingRequired === null) await this.ping(base);
+    if (this.pairingRequired === false) return 'legacy';
+    if (!this.token) return 'unpaired';
+    try {
+      const r = await this.fetchWithTimeout(`${base}/health`, LIST_TIMEOUT, { headers: this.authHeaders() });
+      if (!r.ok) return 'absent';
+      const body = (await r.json()) as { pairingRequired?: boolean; paired?: boolean };
+      if (!body.pairingRequired) {
+        this.pairingRequired = false;
+        return 'legacy';
+      }
+      return body.paired ? 'paired' : 'unpaired';
+    } catch {
+      return 'absent';
+    }
+  }
 
   /** True in any environment that can issue fetch() against localhost. */
   isAvailable(): boolean {
@@ -67,8 +186,8 @@ export class BridgePrintService {
     const base = await this.resolveBase();
     if (!base) return [];
     try {
-      const r = await fetch(`${base}/printers`);
-      if (!r.ok) return [];
+      const r = await fetch(`${base}/printers`, { headers: this.authHeaders() });
+      if (!this.track(r)) return [];
       const body = (await r.json()) as { printers?: HostPrinter[] };
       const printers = body.printers ?? [];
       return printers
@@ -78,7 +197,8 @@ export class BridgePrintService {
           name: `${p.name} [${p.channel}]${p.isDefault ? ' ★' : ''}`,
           connected: p.status === 'ready',
         }));
-    } catch {
+    } catch (err) {
+      this.lost(err);
       return [];
     }
   }
@@ -94,11 +214,12 @@ export class BridgePrintService {
     const base = await this.resolveBase();
     if (!base) return [];
     try {
-      const r = await this.fetchWithTimeout(`${base}/printers`, LIST_TIMEOUT);
-      if (!r.ok) return [];
+      const r = await this.fetchWithTimeout(`${base}/printers`, LIST_TIMEOUT, { headers: this.authHeaders() });
+      if (!this.track(r)) return [];
       const body = (await r.json()) as { printers?: HostPrinter[] };
       return body.printers ?? [];
-    } catch {
+    } catch (err) {
+      this.lost(err);
       return [];
     }
   }
@@ -117,12 +238,14 @@ export class BridgePrintService {
     if (!base) return null;
     try {
       const r = await this.fetchWithTimeout(
-        `${base}/printers/${encodeURIComponent(printerId)}/capabilities`, CAPABILITIES_TIMEOUT);
-      if (!r.ok) return null;
+        `${base}/printers/${encodeURIComponent(printerId)}/capabilities`, CAPABILITIES_TIMEOUT,
+        { headers: this.authHeaders() });
+      if (!this.track(r)) return null;
       const body = (await r.json()) as { ok?: boolean; driverless?: boolean; capabilities?: PrinterCapabilities };
       if (!body.ok || body.driverless || !body.capabilities) return null;
       return body.capabilities;
-    } catch {
+    } catch (err) {
+      this.lost(err);
       return null;
     }
   }
@@ -143,12 +266,7 @@ export class BridgePrintService {
     const t0 = Date.now();
     const base = await this.resolveBase();
     if (!base) {
-      return {
-        success: false,
-        pages: 0,
-        error: 'Print Bridge agent unreachable. Is it installed and running?',
-        timestamp: t0,
-      };
+      return { success: false, pages: 0, error: UNREACHABLE, errorCode: 'agent_unreachable', timestamp: t0 };
     }
     if (pages.length === 0) {
       return { success: false, pages: 0, error: 'No page to print.', timestamp: t0 };
@@ -158,17 +276,25 @@ export class BridgePrintService {
       const { printerId, jobName, ...rest } = options;
       const r = await this.fetchWithTimeout(`${base}/print-document`, PRINT_TIMEOUT, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ printerId, jobName, pages, options: rest }),
       });
       const json = (await r.json().catch(() => ({}))) as { ok?: boolean; pages?: number; error?: string };
+      const errorCode = this.trackCode(r.status, json.error);
       if (!r.ok || json.ok === false) {
-        return { success: false, pages: json.pages ?? 0, error: json.error ?? `HTTP ${r.status}`, timestamp: t0 };
+        return {
+          success: false,
+          pages: json.pages ?? 0,
+          error: json.error ?? `HTTP ${r.status}`,
+          ...(errorCode ? { errorCode } : {}),
+          timestamp: t0,
+        };
       }
       return { success: true, pages: json.pages ?? pages.length, timestamp: t0 };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return { success: false, pages: 0, error: message, timestamp: t0 };
+      const errorCode = this.lost(err);
+      return { success: false, pages: 0, error: message, ...(errorCode ? { errorCode } : {}), timestamp: t0 };
     }
   }
 
@@ -181,12 +307,7 @@ export class BridgePrintService {
     const t0 = Date.now();
     const base = await this.resolveBase();
     if (!base) {
-      return {
-        success: false,
-        driver: 'bridge',
-        error: 'Print Bridge agent unreachable. Is it installed and running?',
-        timestamp: t0,
-      };
+      return { success: false, driver: 'bridge', error: UNREACHABLE, errorCode: 'agent_unreachable', timestamp: t0 };
     }
     try {
       const body = {
@@ -195,26 +316,81 @@ export class BridgePrintService {
       };
       const r = await fetch(`${base}/print`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
       });
       const json = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      const errorCode = this.trackCode(r.status, json.error);
       if (!r.ok || json.ok === false) {
         return {
           success: false,
           driver: 'bridge',
           error: json.error ?? `HTTP ${r.status}`,
+          ...(errorCode ? { errorCode } : {}),
           timestamp: t0,
         };
       }
       return { success: true, driver: 'bridge', timestamp: t0 };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return { success: false, driver: 'bridge', error: message, timestamp: t0 };
+      const errorCode = this.lost(err);
+      return { success: false, driver: 'bridge', error: message, ...(errorCode ? { errorCode } : {}), timestamp: t0 };
     }
   }
 
   // --- internals -----------------------------------------------------------
+
+  /**
+   * Headers for an agent call: the token joins them only for an agent that asks for it, an
+   * older one would refuse the unknown header at preflight and the browser would block the call.
+   */
+  private authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    if (this.token && this.pairingRequired !== false) return { ...extra, [TOKEN_HEADER]: this.token };
+    return extra;
+  }
+
+  /** Maps an agent refusal to its typed reason. */
+  private codeOf(status: number, error?: string): BridgeErrorCode | null {
+    if (error === 'pairing_required' || (status === 401 && !error)) return 'pairing_required';
+    if (error === 'origin_not_allowed') return 'origin_not_allowed';
+    return null;
+  }
+
+  /** Records the reason of a failed call; a pairing refusal also proves the agent wants a token. */
+  private trackCode(status: number, error?: string): BridgeErrorCode | null {
+    const code = this.codeOf(status, error);
+    if (code === 'pairing_required') this.pairingRequired = true;
+    this.lastErrorCode = code;
+    return code;
+  }
+
+  /** True for a successful response; otherwise records why, reading the agent's error. */
+  private track(r: Response): boolean {
+    if (r.ok) {
+      this.lastErrorCode = null;
+      return true;
+    }
+    this.trackCode(r.status, r.status === 401 ? 'pairing_required' : r.status === 403 ? 'origin_not_allowed' : undefined);
+    return false;
+  }
+
+  /**
+   * A fetch that throws a TypeError never reached the agent: it stopped, or moved to its other
+   * port. The cached address is forgotten so the next call probes again. A timeout is not that.
+   */
+  private lost(err: unknown): BridgeErrorCode | null {
+    if (!(err instanceof TypeError)) return null;
+    this.cachedBase = null;
+    this.pairingRequired = null;
+    this.writeCache(null);
+    this.lastErrorCode = 'agent_unreachable';
+    return 'agent_unreachable';
+  }
+
+  private pairFailure(errorCode: BridgeErrorCode, error: string): BridgePairResult {
+    this.lastErrorCode = errorCode;
+    return { success: false, errorCode, error };
+  }
 
   /** A fetch that gives up, so a silent agent cannot hold a caller forever. */
   private async fetchWithTimeout(url: string, timeout: number, init?: RequestInit): Promise<Response> {
@@ -239,6 +415,8 @@ export class BridgePrintService {
     if (this.cachedBase) return this.cachedBase;
     if (this.config.bridgeBaseUrl) {
       this.cachedBase = this.stripTrailingSlash(this.config.bridgeBaseUrl);
+      // Learn whether this agent wants a token; an unreachable one is told apart later.
+      await this.ping(this.cachedBase);
       return this.cachedBase;
     }
     const cached = this.readCache();
@@ -254,6 +432,7 @@ export class BridgePrintService {
         return candidate;
       }
     }
+    this.lastErrorCode = 'agent_unreachable';
     return null;
   }
 
@@ -263,6 +442,10 @@ export class BridgePrintService {
       const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT);
       const r = await fetch(`${base}/health`, { signal: controller.signal });
       clearTimeout(timer);
+      if (r.ok) {
+        const body = (await r.json().catch(() => ({}))) as { pairingRequired?: boolean };
+        this.pairingRequired = body.pairingRequired === true;
+      }
       return r.ok;
     } catch {
       return false;

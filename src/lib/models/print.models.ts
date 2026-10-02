@@ -32,6 +32,43 @@ export interface PosPrintConfig {
   bridgeBaseUrl?: string;
   /** Pin the bridge driver to a specific printer ID returned by `/printers`. */
   bridgePrinterId?: string;
+  /**
+   * Pairing token sent to the Print Bridge agent in `X-Print-Bridge-Token`.
+   *
+   * Since agent 1.1 every call that lists printers or prints needs a token the agent knows,
+   * registered once through `BridgePrintService.pairBridge()` from an allowed web origin.
+   * Without it, any website open on the till could print or open the cash drawer. Generate it
+   * randomly (32 characters or more) and keep it; it can also be set later with
+   * `BridgePrintService.setBridgeToken()`.
+   */
+  bridgeToken?: string;
+}
+
+/**
+ * Why a call to the Print Bridge agent failed, when the agent itself said so.
+ *
+ * - `agent_unreachable`: no agent answered; it is not installed or not running.
+ * - `pairing_required`: the agent answered but does not know this page's token. Pair again.
+ * - `origin_not_allowed`: the agent refuses this website; its allowed origins must list it.
+ */
+export type BridgeErrorCode = 'agent_unreachable' | 'pairing_required' | 'origin_not_allowed';
+
+/**
+ * Pairing state of this page with the Print Bridge agent.
+ *
+ * - `absent`: no agent answered.
+ * - `legacy`: an agent older than 1.1, which needs no pairing.
+ * - `unpaired`: the agent needs a token and does not know the current one (or there is none).
+ * - `paired`: the agent knows the current token.
+ */
+export type BridgePairingStatus = 'absent' | 'legacy' | 'unpaired' | 'paired';
+
+/** Outcome of `pairBridge()` / `unpairBridge()`. */
+export interface BridgePairResult {
+  success: boolean;
+  /** Set when the agent explained the failure. */
+  errorCode?: BridgeErrorCode;
+  error?: string;
 }
 
 /** A single line or command in a print job */
@@ -70,6 +107,8 @@ export interface PrintResult {
   driver: PrintDriver;
   /** Error message if failed */
   error?: string;
+  /** Bridge driver only: typed reason of the failure, to tell "pair again" from "agent absent". */
+  errorCode?: BridgeErrorCode;
   /** Timestamp of the print operation */
   timestamp: number;
 }
@@ -228,5 +267,7 @@ export interface DocumentPrintResult {
   /** Pages effectivement envoyées au pilote. */
   pages: number;
   error?: string;
+  /** Raison typée de l'échec : réassocier, ou agent absent. */
+  errorCode?: BridgeErrorCode;
   timestamp: number;
 }

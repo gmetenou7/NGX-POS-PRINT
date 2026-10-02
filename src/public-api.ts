@@ -18,6 +18,9 @@ export type {
   PrinterCapabilities,
   DocumentPrintOptions,
   DocumentPrintResult,
+  BridgeErrorCode,
+  BridgePairingStatus,
+  BridgePairResult,
 } from './lib/models/print.models';
 
 // Providers

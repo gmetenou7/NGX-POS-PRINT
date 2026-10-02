@@ -1,6 +1,6 @@
 {
   "name": "ngx-pos-print",
-  "version": "1.2.2",
+  "version": "1.3.0",
   "description": "Angular library for POS and document printing, thermal receipts over Bluetooth, Network, USB or a local agent, and A4 documents printed silently through the host's own drivers.",
   "license": "MIT",
   "author": "Gildas",
@@ -11,6 +11,7 @@
   "scripts": {
     "prepublishOnly": "node -e \"console.error('\\n  Ne publiez pas depuis la racine : le manifeste du depot n a ni module ni exports.\\n  Utilisez: npm run release\\n'); process.exit(1)\"",
     "build": "ng-packagr -p ng-package.json",
+    "test": "node --test test/*.test.mjs",
     "pack": "npm run build && cd dist && npm pack",
     "release": "npm run build && cd dist && npm publish"
   },
